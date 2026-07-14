@@ -1,2 +1,18 @@
+# --------------------------------=========================================
+# ARCHIVO DE DEPENDENCIAS DEL ENTORNO VIRTUAL (requirements.txt)
+# --------------------------------=========================================
+
+# 1. Framework oficial de Google para el diseño y orquestación de Sistemas Multiagente
 google-adk
+
+# 2. Biblioteca para la gestión segura de credenciales y carga de la GEMINI_API_KEY desde el archivo .env
 python-dotenv
+
+# 3. Motor matemático de cálculo numérico lineal utilizado por nuestro RAG para procesar la Similitud Coseno
+numpy
+
+# 4. Biblioteca nativa de Google para el consumo estructurado de modelos fundacionales Gemini y embeddings
+google-genai
+
+# 5. Sistema de validación de datos estructurados utilizado para la consistencia de la memoria de SolarProjectState
+pydantic
