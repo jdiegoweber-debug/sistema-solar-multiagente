@@ -1,45 +1,103 @@
-import os # Importamos el módulo del sistema operativo para manejar rutas de archivos de forma segura
-import json # Importamos la biblioteca estándar para estructurar y guardar los datos en formato JSON
+import os # Importamos el módulo del sistema para leer rutas y variables de entorno de forma segura
+import numpy as np # Biblioteca matemática estándar para cómputo numérico lineal de vectores
+from google import genai # El SDK oficial actual provisto por Google para interactuar con Gemini
+from dotenv import load_dotenv # Módulo para cargar las credenciales desde el archivo .env
 
-# Definimos de forma dinámica la ruta donde se creará y guardará nuestra base de datos simulada del CRM corporativo
-CRM_DB_PATH = os.path.join(os.path.dirname(__file__), "crm_database.json")
+# Levantamos las variables de entorno locales (.env) para extraer la API KEY
+load_dotenv()
+# Creamos la instancia del cliente utilizando exactamente la misma configuración que en tu agent.py
+client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
-def mcp_guardar_cliente_crm(nombre: str, ciudad: str, consumo: str, tipo_sistema: str) -> str:
+# CORPUS DE CONOCIMIENTO (Base de datos de grounding real para el Agente Técnico)
+CORPUS_NORMATIVO = {
+    "ley_generacion_distribuida": (
+        "Ley 27.424 - Régimen de Fomento a la Generación Distribuida de Energía Renovable integrada a la red eléctrica pública. "
+        "Permite a los usuarios residenciales y comerciales transformarse en usuarios-generadores. Al generar energía limpia "
+        "mediante fuentes fotovoltaicas, se autoriza legalmente la inyección de excedentes energéticos a la red comercial."
+    ),
+    "medidor_bidireccional": (
+        "Normativa Técnica de Conexión Comercial y Equipamiento de Medición: Todo usuario que instale paneles solares On-Grid "
+        "tiene la obligación de solicitar formalmente a la distribuidora eléctrica local el reemplazo de su equipo tradicional. "
+        "Se debe instalar un medidor bidireccional homologado. Este aparato registra tanto el consumo de la red como la inyección. "
+        "Está terminantemente prohibido inyectar energía con medidores antiguos ya que calculan la inyección como consumo cobrable."
+    ),
+    "bancos_baterias": (
+        "Especificación Técnica ET-S04 - Almacenamiento Energético para Sistemas Aislados: Los sistemas híbridos u Off-Grid "
+        "requieren de forma mandatoria bancos de baterías de Litio o Gel de ciclo profundo. La normativa de seguridad exige que "
+        "estos acumuladores se ubiquen en espacios altamente ventilados con el fin de evitar la acumulación de gases peligrosos "
+        "y asegurar un rango de temperatura estable que prevenga la degradación temprana del componente."
+    ),
+    "proteccion_granizo": (
+        "Estándar Internacional de Calidad IEC 61215 - Resistencia Física de Módulos Fotovoltaicos: Los paneles solares "
+        "homologados se construyen utilizando una cubierta de vidrio templado prismático de alta resistencia (espesor de 3.2 mm). "
+        "La certificación internacional garantiza que los módulos soportan impactos directos de granizo severo de hasta 25 mm "
+        "de diámetro impactando a una velocidad de 82 km/h. Por ende, la normativa desaconseja colocar mallas metálicas "
+        "protectoras sobre los paneles debido a que bloquean la radiación solar y deprimen drásticamente el rendimiento."
+    )
+}
+
+def _obtener_embedding(texto: str, es_consulta: bool = False) -> list:
     """
-    Función de persistencia que simula un servidor MCP (Model Context Protocol).
-    Es consumida por el Agente Comercial cuando el cliente decide avanzar con el proyecto.
+    Función interna que transforma un texto en un vector numérico representativo mediante la API de Google.
     """
-    # Creamos un diccionario Python estructurando de forma prolija los datos capturados del cliente residencial
-    cliente_data = {
-        "nombre": nombre or "Desconocido", # Si el nombre llegó vacío o nulo, guarda un valor por defecto
-        "ciudad": ciudad or "No especificada", # Asigna un valor de resguardo si falta la localización del usuario
-        "consumo_anual_kwh": consumo or "No especificado", # Evita campos vacíos para el consumo eléctrico anual en kWh
-        "tipo_sistema": tipo_sistema or "No especificado", # Guarda si el cliente prefiere un sistema On-Grid u Off-Grid
-        "estado_lead": "Interesado - Pendiente Cotización" # Inyecta un estado comercial inicial para el equipo de ventas
-    }
+    # Determinamos el tipo de tarea según las buenas prácticas del modelo text-embedding-004
+    tipo_tarea = "RETRIEVAL_QUERY" if es_consulta else "RETRIEVAL_DOCUMENT"
+    
+    # Invocamos el modelo de embeddings nativo de Gemini
+    response = client.models.embed_content(
+        model="text-embedding-004", 
+        contents=texto,
+        config={"task_type": tipo_tarea}
+    )
+    # Retornamos el vector flotante que contiene la semántica del texto
+    return response.embeddings.values
+
+# Pre-cómputo automático de los vectores para que la app responda de forma ultra veloz en la terminal
+VECTORES_CORPUS = {}
+for llave, texto_normativo in CORPUS_NORMATIVO.items():
+    VECTORES_CORPUS[llave] = _obtener_embedding(texto_normativo, es_consulta=False)
+
+
+# ¡ACÁ ESTÁ LA FUNCIÓN REQUERIDA! Aseguramos que el nombre coincida exactamente con la importación de agent.py
+def consultar_normativas_solares(query: str) -> str:
+    """
+    Algoritmo RAG Principal consumido por tus agentes. Compara semánticamente la pregunta
+    del usuario contra la base de datos usando Similitud Coseno e inyecta la respuesta exacta.
+    """
+    # Control defensivo inicial
+    if not query or not query.strip():
+        return "No se especificó ninguna consulta técnica válida para procesar en el motor RAG."
 
     try:
-        # Verificamos mediante el sistema operativo si el archivo JSON de la base de datos ya fue creado previamente
-        if os.path.exists(CRM_DB_PATH):
-            # Si el archivo ya existe, lo abrimos en modo lectura con codificación universal UTF-8
-            with open(CRM_DB_PATH, "r", encoding="utf-8") as f:
-                # Cargamos los registros existentes de clientes y los transformamos en una lista de Python
-                data = json.load(f)
-        else:
-            # Si el archivo no existe en el disco, inicializamos una lista de datos completamente nueva y vacía
-            data = []
+        # Transformamos la pregunta libre del cliente en un vector matemático
+        vector_pregunta = _obtener_embedding(query, es_consulta=True)
+        v_query = np.array(vector_pregunta)
 
-        # Agregamos el diccionario con los datos del nuevo cliente al listado histórico de la base de datos
-        data.append(cliente_data)
+        mejor_llave = None
+        max_similitud = -1.0
 
-        # Abrimos el archivo en modo escritura ("w") para actualizar la base de datos en el disco local
-        with open(CRM_DB_PATH, "w", encoding="utf-8") as f:
-            # Guardamos la lista actualizada convirtiéndola en texto JSON formateado de forma legible (indentación de 4 espacios)
-            json.dump(data, f, ensure_ascii=False, indent=4)
+        # Escaneo de proximidad matemática en el espacio vectorial (Similitud Coseno)
+        for llave, vector_documento in VECTORES_CORPUS.items():
+            v_doc = np.array(vector_documento)
+            
+            # Aplicamos la fórmula oficial de Similitud Coseno (Producto punto dividido el producto de las normas)
+            producto_punto = np.dot(v_query, v_doc)
+            norma_query = np.linalg.norm(v_query)
+            norma_doc = np.linalg.norm(v_doc)
+            similitud_coseno = producto_punto / (norma_query * norma_doc)
 
-        # Retornamos un string de confirmación exitoso que el Agente Comercial utilizará para responderle al usuario
-        return f"[Mapeo MCP OK] Cliente '{cliente_data['nombre']}' registrado exitosamente en el CRM corporativo."
+            # Si la puntuación supera al récord previo, guardamos el documento como ganador de contexto
+            if similitud_coseno > max_similitud:
+                max_similitud = similitud_coseno
+                mejor_llave = llave
+
+        # Si el documento supera un umbral mínimo de confianza semántica, inyectamos el fragmento normativo
+        if mejor_llave and max_similitud > 0.35:
+            return CORPUS_NORMATIVO[mejor_llave]
+        
+        # En caso de no detectar un tema específico, inyectamos por defecto la normativa fotovoltaica general
+        return CORPUS_NORMATIVO["ley_generacion_distribuida"]
 
     except Exception as e:
-        # Capturamos cualquier error imprevisto (como problemas de permisos de disco) para evitar que el sistema se rompa
-        return f"[MCP ERROR] Falló la conexión simulada con el servidor externo CRM debido al error: {e}"
+        # Sistema de contingencia resiliente ante cortes de internet o fallas de la API de Google
+        return f"[Aviso RAG Contingente - Error: {e}] Contexto base: Ley Nacional 27.424 de Generación Distribuida."
