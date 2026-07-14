@@ -7,55 +7,51 @@ from dotenv import load_dotenv # Carga segura de claves de desarrollo desde el a
 # =========================================================================
 # IMPORTACIÓN DE HERRAMIENTAS TÉCNICAS Y COMERCIALES (PROTOCOLO RAG Y MCP)
 # =========================================================================
-# Cargamos tu motor de búsqueda semántica por similitud coseno basado en embeddings vectoriales o fallback local
 from src.tools.rag_tool import consultar_normativas_solares
-# Cargamos tu herramienta MCP simulada para persistir los leads interesados directamente en el CRM corporativo
 from src.tools.mcp_crm_tool import mcp_guardar_cliente_crm
 
 # Inicializamos las variables de entorno levantando tu clave privada GEMINI_API_KEY
 load_dotenv()
 client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
+# Regla global de localización para obligar a los modelos a usar lenguaje local
+REGLA_ARGENTINA = (
+    "\n\n[REGLA DE LOCALIZACIÓN OBLIGATORIA]: Debes hablar utilizando exclusivamente "
+    "el dialecto castellano rioplatense (de Argentina). Trata al usuario de 'vos' (voseo). "
+    "Está terminantemente prohibido usar modismos de España o México como 'vale', 'platicar', 'computadora', etc. "
+    "Usa expresiones naturales de Argentina como 'dale', 'che', 'contame', 'factura de luz'."
+)
+
 # =========================================================================
 # CLASE BASE PARA SUB-AGENTES CON MEMORIA DE SESIÓN INDEPENDIENTE
 # =========================================================================
 class SubAgenteBaseConSesion:
     def __init__(self, name, instruction, tools=None):
-        self.name = name # Nombre identificatorio del agente experto (ej. AgenteTecnico)
-        self.instruction = instruction # Pront del sistema o rol asignado por ingeniería de instrucciones
-        self.tools = tools or [] # Listado de herramientas externas asociadas al especialista
-        self._sesiones = {} # Diccionario interno en memoria para aislar los hilos de chat por cada cliente
+        self.name = name 
+        self.instruction = instruction + REGLA_ARGENTINA # Acoplamos la regla argentina a cada agente
+        self.tools = tools or [] 
+        self._sesiones = {} 
 
     def responder(self, mensaje_usuario, datos_cliente, session_id="consola_default"):
         """
         Gestiona la conversación histórica del cliente e inyecta dinámicamente las herramientas RAG o MCP.
         """
-        # Inicializamos el chat histórico con su configuración de sistema si es el primer mensaje de la sesión
         if session_id not in self._sesiones:
             config = types.GenerateContentConfig(
                 system_instruction=f"{self.instruction}\n\n[SharedState - Memoria Actual del Cliente]: {datos_cliente}"
             )
-            # Creamos el objeto chat nativo de Gemini que mantiene automáticamente el contexto de turnos anteriores
             self._sesiones[session_id] = client.chats.create(model='gemini-2.5-flash', config=config)
 
-        # Bloque de lógica integrada de ejecución de herramientas
         contexto_herramientas = ""
         
-        # Inyección dinámica del RAG si el agente posee la herramienta y el usuario consulta temas técnicos
         if consultar_normativas_solares in self.tools and any(w in mensaje_usuario.lower() for w in ["granizo", "bateria", "red", "ley", "medidor"]):
             contexto_herramientas = f"\n\n[Inyección RAG del Sistema]: {consultar_normativas_solares(mensaje_usuario)}"
             
-        # Inyección dinámica del protocolo MCP si el agente posee la herramienta y el usuario decide registrarse
         if mcp_guardar_cliente_crm in self.tools and any(w in mensaje_usuario.lower() for w in ["guardar", "crm", "registrar"]):
             contexto_herramientas = f"\n\n[Inyección Protocolo MCP]: {mcp_guardar_cliente_crm(datos_cliente.get('nombre',''), datos_cliente.get('ciudad',''), datos_cliente.get('consumo_anual_kwh',''), datos_cliente.get('tipo_sistema',''))}"
 
-        # Ensamblamos el mensaje final sumando el aporte del RAG o MCP si aplicase
         mensaje_final = f"{mensaje_usuario}{contexto_herramientas}"
-        
-        # Despachamos el mensaje final al hilo histórico de Gemini
         response = self._sesiones[session_id].send_message(mensaje_final)
-        
-        # Retornamos el texto plano generado por el modelo
         return response.text
 
 
@@ -63,7 +59,7 @@ class SubAgenteBaseConSesion:
 # INSTANCIAS DE SUB-AGENTES ESPECIALIZADOS
 # =========================================================================
 
-# 1. Agente Casual (Filtro conversacional básico para saludos o bromas)
+# 1. Agente Casual
 subagente_casual = SubAgenteBaseConSesion(
     name="AgenteCasual",
     instruction=(
@@ -79,8 +75,10 @@ subagente_coloquial = SubAgenteBaseConSesion(
     name="AgenteColoquial",
     instruction=(
         "Eres un asesor de atención al cliente empático para una empresa de energía solar. "
-        "Tu objetivo es guiar la charla de forma amena. Intenta averiguar sutilmente el nombre, "
-        "ciudad, consumo eléctrico y tipo de sistema del cliente si faltan en la memoria compartida, lo ideal es que le des un pantallazo al cliente de todos los datos que vas a necesitar pero que despues le vallas preguntand las cosas de a una y dando opciones, sino el cliente se marea con tanta informacion junta."
+        "Tu objetivo es guiar la charla de forma amena. Revisa con extrema atención el [SharedState] "
+        "y el historial del chat: si el cliente ya te dijo su nombre o su ciudad en algún turno, "
+        "NO se lo vuelvas a preguntar jamás. Avanza orgánicamente pidiéndole los datos que falten "
+        "(consumo eléctrico mensual/anual o tipo de sistema deseado)."
     )
 )
 
@@ -119,24 +117,34 @@ class OrquestadorSolar:
         """
         mensaje = user_input.lower()
 
-        # BLOQUE A: Extractor JSON en segundo plano para actualizar el SharedState de forma dinámica
+        # BLOQUE A: Extractor JSON optimizado para ser mucho más flexible y detectar datos cruzados
         prompt_extractor = f"""
-        Analiza el mensaje del usuario y extrae datos relevantes. 
-        Estado actual: {datos_cliente} 
-        Nuevo mensaje: "{user_input}" 
-        Devuelve un objeto JSON con las llaves: nombre, ciudad, consumo_anual_kwh, tipo_sistema. 
-        Si no detectas cambios pon null. No agregues texto extra, marcas markdown ni introducciones.
+        Actúa como un extractor de entidades ultra preciso para un sistema de energía solar.
+        Analiza detalladamente el nuevo mensaje del usuario buscando menciones explícitas o implícitas de su nombre, 
+        su ciudad geográfica, su consumo eléctrico o el tipo de sistema que prefiere.
+
+        Estado de memoria actual: {datos_cliente} 
+        Nuevo mensaje recibido: "{user_input}" 
+
+        Instrucciones críticas de extracción:
+        1. Si el usuario menciona un lugar geográfico (ej: "Tandil", "Mendoza", "Córdoba"), guárdalo en 'ciudad'.
+        2. Si menciona su identidad (ej: "soy Diego Weber", "mi nombre es Juan"), guárdalo en 'nombre'.
+        3. Mantén los datos preexistentes del Estado actual si el nuevo mensaje no los contradice.
+        4. Devuelve UNICAMENTE un objeto JSON puro con las llaves: nombre, ciudad, consumo_anual_kwh, tipo_sistema.
+        5. Si no hay datos nuevos para una llave, pon el valor que ya tenía el Estado actual (no pongas null si ya existía un dato).
+        6. Está prohibido agregar texto extra, introducciones o marcas de código markdown.
         """
         try:
             res = client.models.generate_content(model='gemini-2.5-flash', contents=prompt_extractor)
             texto_limpio = res.text.strip().replace("```json", "").replace("```", "")
             nuevos_datos = json.loads(texto_limpio)
-            # Muta la memoria común compartida con los datos frescos capturados
+            
+            # Muta la memoria común compartida resguardando la información
             for k, v in nuevos_datos.items():
                 if v is not None:
                     datos_cliente[k] = v
         except Exception:
-            pass # Si el parseo falla, el sistema continúa el flujo de forma silenciosa para no interrumpir la experiencia
+            pass 
 
         # BLOQUE B: LÓGICA DE ENRUTAMIENTO JERÁRQUICO MULTIAGENTE
         
@@ -161,5 +169,4 @@ class OrquestadorSolar:
         # Fallback por defecto si no encaja estrictamente en ninguna categoría
         return subagente_coloquial
 
-# Creamos la instancia global exacta requerida por tu archivo src/main.py
 solar_orchestrator = OrquestadorSolar()
