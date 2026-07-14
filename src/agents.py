@@ -14,12 +14,15 @@ from src.tools.mcp_crm_tool import mcp_guardar_cliente_crm
 load_dotenv()
 client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
-# Regla global de localización para obligar a los modelos a usar lenguaje local
+# Regla global de localización para obligar a los modelos a usar lenguaje local y ocultar la memoria
 REGLA_ARGENTINA = (
     "\n\n[REGLA DE LOCALIZACIÓN OBLIGATORIA]: Debes hablar utilizando exclusivamente "
     "el dialecto castellano rioplatense (de Argentina). Trata al usuario de 'vos' (voseo). "
-    "Está terminantemente prohibido usar modismos de España o México como 'vale', 'platicar', 'computadora', etc. "
-    "Usa expresiones naturales de Argentina como 'dale', 'che', 'contame', 'factura de luz'."
+    "Está terminantemente prohibido usar modismos de España o México como 'vale', 'platicar', etc. "
+    "\n\n[REGLA DE PRIVACIDAD CRÍTICA]: Tienes acceso a un bloque de datos del cliente llamado 'SharedState'. "
+    "Usa esa información internamente para guiar tus respuestas, pero está TERMINANTEMENTE PROHIBIDO "
+    "escribir el texto '[SharedState - Memoria Actual del Cliente]' o volcar el diccionario JSON en tu respuesta. "
+    "La memoria debe ser invisible para el usuario."
 )
 
 # =========================================================================
@@ -28,7 +31,7 @@ REGLA_ARGENTINA = (
 class SubAgenteBaseConSesion:
     def __init__(self, name, instruction, tools=None):
         self.name = name 
-        self.instruction = instruction + REGLA_ARGENTINA # Acoplamos la regla argentina a cada agente
+        self.instruction = instruction + REGLA_ARGENTINA # Acoplamos la regla a cada agente
         self.tools = tools or [] 
         self._sesiones = {} 
 
@@ -38,7 +41,7 @@ class SubAgenteBaseConSesion:
         """
         if session_id not in self._sesiones:
             config = types.GenerateContentConfig(
-                system_instruction=f"{self.instruction}\n\n[SharedState - Memoria Actual del Cliente]: {datos_cliente}"
+                system_instruction=f"{self.instruction}\n\n[SharedState - Memoria Oculta del Cliente]: {datos_cliente}"
             )
             self._sesiones[session_id] = client.chats.create(model='gemini-2.5-flash', config=config)
 
@@ -52,7 +55,14 @@ class SubAgenteBaseConSesion:
 
         mensaje_final = f"{mensaje_usuario}{contexto_herramientas}"
         response = self._sesiones[session_id].send_message(mensaje_final)
-        return response.text
+        
+        # Limpieza de seguridad por si el modelo ignora el prompt e intenta imprimir la memoria
+        respuesta_limpia = response.text
+        if "[SharedState" in respuesta_limpia:
+            # Cortamos cualquier filtración de texto técnica que intente hacer el LLM
+            respuesta_limpia = respuesta_limpia.split("[SharedState")[0].strip()
+            
+        return respuesta_limpia
 
 
 # =========================================================================
@@ -70,7 +80,7 @@ subagente_casual = SubAgenteBaseConSesion(
     )
 )
 
-# 2. Agente Coloquial Solar (Perfilador de clientes y recolector de los 4 datos clave)
+# 2. Agente Coloquial Solar
 subagente_coloquial = SubAgenteBaseConSesion(
     name="AgenteColoquial",
     instruction=(
@@ -78,27 +88,29 @@ subagente_coloquial = SubAgenteBaseConSesion(
         "Tu objetivo es guiar la charla de forma amena. Revisa con extrema atención el [SharedState] "
         "y el historial del chat: si el cliente ya te dijo su nombre o su ciudad en algún turno, "
         "NO se lo vuelvas a preguntar jamás. Avanza orgánicamente pidiéndole los datos que falten "
-        "(consumo eléctrico mensual/anual o tipo de sistema deseado)."
+        "(consumo eléctrico mensual/anual o tipo de sistema deseado). Jamás imprimas texto técnico en pantalla."
     )
 )
 
-# 3. Agente Técnico (Ingeniero fotovoltaico respaldado por RAG Vectorial)
+# 3. Agente Técnico
 subagente_tecnico = SubAgenteBaseConSesion(
     name="AgenteTecnico",
     instruction=(
         "Eres un ingeniero especialista en dimensionamiento solar fotovoltaico. Responde dudas técnicas sobre paneles, "
         "inversores, espacio en techos e inclemencias climáticas. Usa obligatoriamente los datos "
-        "del RAG técnico inyectados para fundamentar tus respuestas según la ley de generación distribuida."
+        "del RAG técnico inyectados para fundamentar tus respuestas según la ley de generación distribuida. "
+        "Jamás imprimas texto de depuración o diccionarios en tu respuesta."
     ),
     tools=[consultar_normativas_solares]
 )
 
-# 4. Agente Comercial (Asesor financiero con persistencia CRM vía MCP)
+# 4. Agente Comercial
 subagente_comercial = SubAgenteBaseConSesion(
     name="AgenteComercial",
     instruction=(
         "Eres el asesor financiero del equipo solar. Calculas presupuestos estimados y el retorno de inversión (ROI). "
-        "Si el usuario confirma que desea avanzar o registrar sus datos, indícales que procederás a guardarlo en el CRM de la empresa."
+        "Si el usuario confirma que desea avanzar o registrar sus datos, indícales que procederás a guardarlo en el CRM de la empresa. "
+        "Jamás imprimas variables de código o estados internos en tu respuesta."
     ),
     tools=[mcp_guardar_cliente_crm]
 )
@@ -117,29 +129,23 @@ class OrquestadorSolar:
         """
         mensaje = user_input.lower()
 
-        # BLOQUE A: Extractor JSON optimizado para ser mucho más flexible y detectar datos cruzados
+        # BLOQUE A: Extractor JSON optimizado en segundo plano
         prompt_extractor = f"""
         Actúa como un extractor de entidades ultra preciso para un sistema de energía solar.
-        Analiza detalladamente el nuevo mensaje del usuario buscando menciones explícitas o implícitas de su nombre, 
-        su ciudad geográfica, su consumo eléctrico o el tipo de sistema que prefiere.
+        Analiza el nuevo mensaje buscando menciones de nombre, ciudad, consumo o tipo de sistema.
 
         Estado de memoria actual: {datos_cliente} 
         Nuevo mensaje recibido: "{user_input}" 
 
-        Instrucciones críticas de extracción:
-        1. Si el usuario menciona un lugar geográfico (ej: "Tandil", "Mendoza", "Córdoba"), guárdalo en 'ciudad'.
-        2. Si menciona su identidad (ej: "soy Diego Weber", "mi nombre es Juan"), guárdalo en 'nombre'.
-        3. Mantén los datos preexistentes del Estado actual si el nuevo mensaje no los contradice.
-        4. Devuelve UNICAMENTE un objeto JSON puro con las llaves: nombre, ciudad, consumo_anual_kwh, tipo_sistema.
-        5. Si no hay datos nuevos para una llave, pon el valor que ya tenía el Estado actual (no pongas null si ya existía un dato).
-        6. Está prohibido agregar texto extra, introducciones o marcas de código markdown.
+        Devuelve UNICAMENTE un objeto JSON puro con las llaves: nombre, ciudad, consumo_anual_kwh, tipo_sistema.
+        Si no hay datos nuevos para una llave, mantén el valor preexistente del Estado actual.
+        Está prohibido agregar texto extra o marcas de código markdown.
         """
         try:
             res = client.models.generate_content(model='gemini-2.5-flash', contents=prompt_extractor)
             texto_limpio = res.text.strip().replace("```json", "").replace("```", "")
             nuevos_datos = json.loads(texto_limpio)
             
-            # Muta la memoria común compartida resguardando la información
             for k, v in nuevos_datos.items():
                 if v is not None:
                     datos_cliente[k] = v
@@ -147,26 +153,20 @@ class OrquestadorSolar:
             pass 
 
         # BLOQUE B: LÓGICA DE ENRUTAMIENTO JERÁRQUICO MULTIAGENTE
-        
-        # 1. Regla de Despedida
         if any(word in mensaje for word in ["salir", "chau", "adios", "hasta luego", "terminar", "cerrar", "basta"]):
             return subagente_casual
 
-        # 2. Regla de Saludos o Charlas Informales
         if mensaje in ["hola", "buen dia", "buenas", "gracias"] or any(word in mensaje for word in ["chiste", "que haces", "hola cómo estás"]):
             if not datos_cliente.get("nombre") or not datos_cliente.get("ciudad"):
                 return subagente_coloquial
             return subagente_casual
 
-        # 3. Enrutamiento al Especialista Técnico (Disparadores RAG)
         if any(word in mensaje for word in ["panel", "techo", "bateria", "granizo", "ingenieria", "inversor", "ley", "medidor", "generacion", "distribuida"]):
             return subagente_tecnico
 
-        # 4. Enrutamiento al Asesor Comercial (Disparadores MCP)
         if any(word in mensaje for word in ["precio", "costo", "financiar", "presupuesto", "roi", "plata", "guardar", "crm", "comprar"]):
             return subagente_comercial
 
-        # Fallback por defecto si no encaja estrictamente en ninguna categoría
         return subagente_coloquial
 
 solar_orchestrator = OrquestadorSolar()

@@ -10,12 +10,14 @@ load_dotenv()
 # Inicializamos el cliente de forma estándar para interactuar con Gemini
 client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
-# CORPUS DE CONOCIMIENTO (Base de datos de grounding real para el Agente Técnico)
+# CORPUS DE CONOCIMIENTO CORREGIDO (Base de datos de grounding real para el Agente Técnico)
 CORPUS_NORMATIVO = {
     "ley_generacion_distribuida": (
-        "Ley 27.424 - Régimen de Fomento a la Generación Distribuida de Energía Renovable integrada a la red eléctrica pública. "
-        "Permite a los usuarios residenciales y comerciales transformarse en usuarios-generadores. Al generar energía limpia "
-        "mediante fuentes fotovoltaicas, se autoriza legalmente la inyección de excedentes energéticos a la red comercial."
+        "Ley 27.424 y Adhesión de la Provincia de Buenos Aires (OCEBA): Régimen de Fomento a la Generación Distribuida. "
+        "Permite a los usuarios residenciales conectarse como usuarios-generadores. "
+        "IMPORTANTE: En la Provincia de Buenos Aires, la normativa técnica establece de forma estricta que "
+        "el límite máximo de potencia permitida para inyectar en una instalación residencial MONOFÁSICA es de hasta 5 kW. "
+        "Los sistemas que superen los 5 kW deben contar obligatoriamente con una conexión trifásica."
     ),
     "medidor_bidireccional": (
         "Normativa Técnica de Conexión Comercial y Equipamiento de Medición: Todo usuario que instale paneles solares On-Grid "
@@ -40,7 +42,7 @@ CORPUS_NORMATIVO = {
 
 def _obtener_embedding(texto: str, es_consulta: bool = False) -> list:
     """
-    Función interna que intenta invoca el endpoint oficial de pago de Google GenAI.
+    Función interna que intenta invocar el endpoint oficial de pago de Google GenAI.
     Si la API devuelve un error o un 404, retorna un vector simulado para no colgar el flujo.
     """
     tipo_tarea = "RETRIEVAL_QUERY" if es_consulta else "RETRIEVAL_DOCUMENT"
@@ -55,8 +57,6 @@ def _obtener_embedding(texto: str, es_consulta: bool = False) -> list:
         )
         return response.embeddings.values
     except Exception:
-        # Si la API falla por permisos o enrutamiento, probemos devolviendo un vector de ceros
-        # Esto actúa como un resguardo básico de datos para que el programa no tire un error crítico
         return [0.0] * 768
 
 # PRE-CÓMPUTO VECTORIAL CLOUD
@@ -64,7 +64,6 @@ VECTORES_CORPUS = {}
 print("🛰️  Conectando con la API de Google: Inicializando tensores y base de datos vectorial del RAG...")
 
 for llave, texto_normativo in CORPUS_NORMATIVO.items():
-    # Procesamos la carga de cada documento a través de nuestra función con resguardo defensivo
     VECTORES_CORPUS[llave] = np.array(_obtener_embedding(texto_normativo, es_consulta=False))
 
 print("✅ Módulo RAG levantado con éxito.")
@@ -86,7 +85,6 @@ def consultar_normativas_solares(query: str) -> str:
         max_similitud = -1.0
 
         for llave, v_doc in VECTORES_CORPUS.items():
-            # Si ambos vectores son válidos y no están vacíos (evita divisiones por cero en el resguardo)
             norma_query = np.linalg.norm(v_query)
             norma_doc = np.linalg.norm(v_doc)
             
@@ -100,12 +98,10 @@ def consultar_normativas_solares(query: str) -> str:
                 max_similitud = similitud_coseno
                 mejor_llave = llave
 
-        # Si matcheó de forma semántica exitosa en la nube, devuelve la sección correspondiente
         if mejor_llave and max_similitud > 0.35:
             return CORPUS_NORMATIVO[mejor_llave]
         
-        # Resguardo si no hay afinidad alta o si operó bajo el vector de contingencia
-        return CORPUS_NORMATIVO["ley_generacion_dist distribuida"]
+        return CORPUS_NORMATIVO["ley_generacion_distribuida"]
 
     except Exception:
         return CORPUS_NORMATIVO["ley_generacion_distribuida"]
