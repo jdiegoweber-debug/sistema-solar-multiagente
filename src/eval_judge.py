@@ -1,7 +1,7 @@
 import os # Importación para leer API_KEY
 import json # Para validar la estructura JSON de la evaluación
 from google import genai # SDK de Google para conectarse a Gemini
-from src.agent import subagente_tecnico # Importación del subagente técnico a evaluar
+from src.agents import subagente_tecnico # Importación del subagente técnico a evaluar
 
 # Inicialización del cliente de IA
 client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
