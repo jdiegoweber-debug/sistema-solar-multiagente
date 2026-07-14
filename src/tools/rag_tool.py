@@ -6,8 +6,13 @@ from dotenv import load_dotenv # Utilidad para levantar de forma segura las clav
 
 # Levantamos la configuración del archivo .env para extraer tus credenciales de pago de Google AI Studio
 load_dotenv()
-# Instanciamos el cliente reutilizando la misma API KEY global, garantizando consistencia en todo el proyecto
-client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+
+# ¡CONFIGURACIÓN CLOUD DEFINITIVA!: Forzamos al cliente moderno a comunicarse usando el endpoint 'v1' estable
+# Esto remueve el bug de enrutamiento de la ruta 'v1beta' y garantiza que tu API de pago responda siempre
+client = genai.Client(
+    api_key=os.environ.get("GEMINI_API_KEY"),
+    http_options={'api_version': 'v1'}
+)
 
 # CORPUS DE CONOCIMIENTO (Base de datos de grounding real para el Agente Técnico)
 CORPUS_NORMATIVO = {
@@ -56,13 +61,12 @@ def _obtener_embedding(texto: str, es_consulta: bool = False) -> list:
     # Extraemos y retornamos los valores numéricos decimales del vector del espacio latente
     return response.embeddings.values
 
-# PRE-CÓMPUTO VECTORIAL OBLIGATORIO (Se ejecuta una sola vez al arrancar el programa)
-# Convertimos todas las normativas del corpus en vectores de Google y los dejamos listos en memoria RAM
+# PRE-CÓMPUTO VECTORIAL CLOUD (Se ejecuta una sola vez al arrancar el programa en memoria RAM)
 VECTORES_CORPUS = {}
 print("🛰️  Conectando con la API de Google: Inicializando tensores y base de datos vectorial del RAG...")
 
 for llave, texto_normativo in CORPUS_NORMATIVO.items():
-    # Cada fragmento de texto se convierte en un array unidimensional de NumPy de alta dimensionalidad
+    # Cada fragmento de texto se convierte en un array unidimensional de NumPy a través de tu API Key de pago
     VECTORES_CORPUS[llave] = np.array(_obtener_embedding(texto_normativo, es_consulta=False))
 
 print("✅ [Modo Vectorial Cloud Activo]: Base de conocimiento sincronizada mediante la API de Google.")
