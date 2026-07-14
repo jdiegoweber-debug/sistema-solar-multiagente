@@ -1,8 +1,8 @@
 import sys # Módulo para interactuar con funciones esenciales del sistema operativo e intérpretes de Python
 from src.state import SolarProjectState # Cargamos tu esquema Pydantic para manejar de forma segura la memoria del cliente
 
-# Importamos directamente tu variable exacta desde tu archivo 'src/agents.py'
-from src.agents import solar_orchestrator
+# Importamos la clase constructora del orquestador desde tu archivo en plural
+from src.agents import OrquestadorSolar
 
 def main():
     """
@@ -16,6 +16,9 @@ def main():
 
     # Inicializamos la memoria común compartida usando tu clase base de Pydantic
     state = SolarProjectState()
+    
+    # Creamos la instancia local del orquestador directamente aquí para evitar fallas de importación
+    solar_orchestrator = OrquestadorSolar()
     
     # Identificador único de sesión para hilos de chat independientes (consola local por defecto)
     session_id = "consola_default"
@@ -41,7 +44,7 @@ def main():
             # Pasamos directamente el diccionario '.datos_cliente' para que el extractor JSON lo mute en tiempo real
             agente_elegido = solar_orchestrator.route_request(user_input, state.datos_cliente)
 
-            # Paso 2: El subagente experto responde la duda técnica o comercial basándose en la memoria compartida
+            # Paso 2: El subagente experto responde la duda técnica o comercial basándose en el historial unificado
             respuesta = agente_elegido.responder(
                 mensaje_usuario=user_input, 
                 datos_cliente=state.datos_cliente, 
@@ -53,12 +56,12 @@ def main():
 
             # Condición de salida si el cliente ingresa una palabra clave de despedida comercial
             if any(word in user_input.lower() for word in ["salir", "chau", "adios", "hasta luego", "terminar"]):
-                print("👋 Sistema cerrado correctamente.")
+                print("🔒 Sesión finalizada correctamente por el usuario.")
                 break
 
         except (KeyboardInterrupt, EOFError):
             # Capturamos si el usuario presiona las teclas de interrupción del sistema para un cierre limpio
-            print("\n👋 Programa interrumpido de forma manual por el usuario.")
+            print("\n🔒 Sesión interrumpida.")
             sys.exit(0)
         except Exception as e:
             # Evitamos que errores imprevistos cuelguen la ejecución del programa completo

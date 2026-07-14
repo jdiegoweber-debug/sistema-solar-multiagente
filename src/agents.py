@@ -5,11 +5,10 @@ from google import genai # El SDK moderno y oficial de Google para consumir mode
 from google.genai import types # Configuraciones tipadas avanzadas para los chats de la API
 from dotenv import load_dotenv # Carga segura de claves de desarrollo desde el archivo .env
 
-# =========================================================================
-# IMPORTACIÓN DE HERRAMIENTAS TÉCNICAS Y COMERCIALES (PROTOCOLO RAG Y MCP)
-# =========================================================================
-from src.tools.rag_tool import consultar_normativas_solares
+# Importamos la nueva herramienta de lectura web que creamos en el paso anterior
+from src.tools.web_reader_tool import leer_contenido_enlace_web
 from src.tools.mcp_crm_tool import mcp_guardar_cliente_crm
+from src.tools.rag_tool import consultar_normativas_solares
 
 # Inicializamos las variables de entorno levantando tu clave privada GEMINI_API_KEY
 load_dotenv()
@@ -27,10 +26,7 @@ REGLA_ARGENTINA = (
     "Está prohibido escribir el texto '[SharedState]' o volcar el diccionario JSON en tu respuesta."
 )
 
-# =========================================================================
-# MEMORIA GLOBAL COMPARTIDA DE TURNOS (Aisla y unifica la conversación por sesión)
-# =========================================================================
-# Diccionario global en memoria para guardar el historial completo de mensajes cruzados entre todos los agentes
+# Memoria global cruzada de mensajes unificados para mantener el hilo de la charla entre agentes
 HISTORIAL_MENSAJES_GLOBAL = {}
 
 # =========================================================================
@@ -39,29 +35,37 @@ HISTORIAL_MENSAJES_GLOBAL = {}
 class SubAgenteBaseConSesion:
     def __init__(self, name, instruction, tools=None):
         self.name = name 
-        self.instruction = instruction + REGLA_ARGENTINA # Acoplamos la regla a cada agente
+        self.instruction = instruction + REGLA_ARGENTINA 
         self.tools = tools or [] 
 
     def responder(self, mensaje_usuario, datos_cliente, session_id="consola_default"):
         """
-        Gestiona la conversación histórica cruzada inyectando el estado mutado y las herramientas RAG/MCP.
+        Gestiona la conversación histórica cruzada inyectando el estado mutado y las herramientas RAG/MCP/Web.
         """
         global HISTORIAL_MENSAJES_GLOBAL
         
-        # Inicializamos la lista de mensajes cronológicos de la sesión si es la primera interacción
         if session_id not in HISTORIAL_MENSAJES_GLOBAL:
             HISTORIAL_MENSAJES_GLOBAL[session_id] = []
 
-        # Bloque de lógica integrada de ejecución de herramientas para inyectar contexto fresco
         contexto_herramientas = ""
         
+        # 1. Inyección del RAG Técnico
         if consultar_normativas_solares in self.tools and any(w in mensaje_usuario.lower() for w in ["granizo", "bateria", "red", "ley", "medidor"]):
-            contexto_herramientas = f"\n\n[Inyección RAG del Sistema]: {consultar_normativas_solares(mensaje_usuario)}"
+            contexto_herramientas += f"\n\n[Inyección RAG del Sistema]: {consultar_normativas_solares(mensaje_usuario)}"
             
+        # 2. Inyección del MCP Comercial
         if mcp_guardar_cliente_crm in self.tools and any(w in mensaje_usuario.lower() for w in ["guardar", "crm", "registrar"]):
-            contexto_herramientas = f"\n\n[Inyección Protocolo MCP]: {mcp_guardar_cliente_crm(datos_cliente.get('nombre',''), datos_cliente.get('ciudad',''), datos_cliente.get('consumo_anual_kwh',''), datos_cliente.get('tipo_sistema',''))}"
+            contexto_herramientas += f"\n\n[Inyección Protocolo MCP]: {mcp_guardar_cliente_crm(datos_cliente.get('nombre',''), datos_cliente.get('ciudad',''), datos_cliente.get('consumo_anual_kwh',''), datos_cliente.get('tipo_sistema',''))}"
 
-        # Ensamblamos el mensaje final sumando el aporte del RAG o MCP si aplicase
+        # 3. Inyección de la Herramienta de Lectura de Enlaces Web (Scraper)
+        if leer_contenido_enlace_web in self.tools and ("http://" in mensaje_usuario or "https://" in mensaje_usuario):
+            # Extraemos la URL que el usuario pegó en la consola usando expresiones regulares
+            urls = re.findall(r'(https?://[^\s]+)', mensaje_usuario)
+            if urls:
+                # Invocamos la herramienta web e inyectamos el texto limpio extraído de la página en el prompt
+                contexto_herramientas += f"\n\n[Contenido de la Factura Extraído de la Web]: {leer_contenido_enlace_web(urls[0])}"
+
+        # Ensamblamos el mensaje final sumando el aporte de la herramienta que se haya activado
         mensaje_final = f"{mensaje_usuario}{contexto_herramientas}"
 
         # Guardamos el mensaje actual del usuario en la memoria global de la sesión
@@ -72,11 +76,10 @@ class SubAgenteBaseConSesion:
         # Configuramos las instrucciones del sistema actualizadas dinámicamente con el estado real mutado
         config = types.GenerateContentConfig(
             system_instruction=f"{self.instruction}\n\n[SharedState Actual de la Memoria Backend]: {datos_cliente}",
-            temperature=0.3 # Bajamos la temperatura para que sea más preciso y obedezca el contexto
+            temperature=0.3 
         )
 
         # Invocamos el modelo generate_content enviándole TODO el historial unificado de la conversación
-        # Esto garantiza que el nuevo agente conozca perfectamente lo que hablaste con los agentes anteriores
         response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=HISTORIAL_MENSAJES_GLOBAL[session_id],
@@ -96,92 +99,84 @@ class SubAgenteBaseConSesion:
 # =========================================================================
 # INSTANCIAS DE SUB-AGENTES ESPECIALIZADOS
 # =========================================================================
-
-# 1. Agente Casual
 subagente_casual = SubAgenteBaseConSesion(
     name="AgenteCasual",
-    instruction=(
-        "Eres un compañero de conversación amigable y casual. Mantén tus respuestas "
-        "cortas, naturales y amables.\n"
-        "Reglas: Responde en 3 oraciones o menos. NO inventes información técnica o comercial. "
-        "Si detectas consultas del negocio solar, avisa que derivarás la charla."
-    )
+    instruction="Eres un compañero de conversación casual. Responde en 3 oraciones o menos. NO des datos técnicos."
 )
 
-# 2. Agente Coloquial Solar
 subagente_coloquial = SubAgenteBaseConSesion(
     name="AgenteColoquial",
-    instruction=(
-        "Eres un asesor de atención al cliente empático para una empresa de energía solar. "
-        "Tu objetivo es guiar la charla de forma amena. Revisa con extrema atención el [SharedState]: "
-        "si el cliente ya te dijo su nombre, su ciudad, su consumo o el tipo de sistema, "
-        "NO se lo vuelvas a preguntar jamás. Avanza orgánicamente pidiéndole solo los datos que falten. "
-        "Si ya completó todos los datos, felicítalo y dale el pase al equipo técnico o comercial de forma cordial."
-    )
+    instruction="Eres un asesor empático para clientes residenciales. Averigua sutilmente los datos que falten del SharedState sin repetir preguntas."
 )
 
-# 3. Agente Técnico
 subagente_tecnico = SubAgenteBaseConSesion(
     name="AgenteTecnico",
-    instruction=(
-        "Eres un ingeniero especialista en dimensionamiento solar fotovoltaico. Responde dudas técnicas sobre paneles, "
-        "inversores, espacio en techos e inclemencias climáticas. Usa obligatoriamente los datos "
-        "del RAG técnico inyectados para fundamentar tus respuestas según la ley de generación distribuida. "
-        "Jamás imprimas texto de depuración o diccionarios en tu respuesta."
-    ),
+    instruction="Eres un ingeniero fotovoltaico. Responde dudas técnicas basándote obligatoriamente en el RAG inyectado.",
     tools=[consultar_normativas_solares]
 )
 
-# 4. Agente Comercial
+# Actualizamos las instrucciones y herramientas del comercial para que sepa interpretar la inyección web
 subagente_comercial = SubAgenteBaseConSesion(
     name="AgenteComercial",
     instruction=(
-        "Eres el asesor financiero especialista en costos del equipo solar. Calculas presupuestos estimados y el retorno de inversión (ROI). "
-        "Analiza el historial: el cliente ya te dio su consumo y su ciudad, no los pidas de nuevo. "
-        "Responde directamente calculando el retorno de inversión (ROI), explicando qué significa y cuánto tardaría en recuperar la plata. "
-        "Si el usuario confirma que desea avanzar o registrar sus datos, indícales que procederás a guardarlo en el CRM de la empresa."
+        "Eres el asesor financiero especialista en costos del equipo solar. Calculas presupuestos estimados y el retorno de inversión (ROI).\n"
+        "Analiza el historial y el bloque de contenido web si existiese: si el cliente te pasa un enlace, lee los datos extraídos "
+        "para buscar los kWh consumidos, el monto total a pagar de la boleta y el nombre de la distribuidora (ej: Usina de Tandil).\n"
+        "Usa esos números reales de la factura para ajustar el cálculo del ROI en pesos argentinos de forma precisa."
     ),
-    tools=[mcp_guardar_cliente_crm]
+    tools=[mcp_guardar_cliente_crm, leer_contenido_enlace_web] # Sumamos la herramienta de lectura web
 )
 
 
 # =========================================================================
-# AGENTE ORQUESTADOR CENTRAL (LÓGICA MULTIAGENTE Y ENRUTAMIENTO JERÁRQUICO)
+# AGENTE ORQUESTADOR CENTRAL
 # =========================================================================
 class OrquestadorSolar:
     def __init__(self):
         self.name = "OrquestadorSolar"
 
-    def route_request(self, user_input, datos_cliente):
-        """
-        Analiza la entrada del usuario, extrae datos estructurados en segundo plano y elige al subagente experto.
-        """
-        mensaje = user_input.lower()
-
-        # BLOQUE A: Extractor JSON optimizado en segundo plano
+    def _extraer_datos_bg(self, user_input, datos_cliente):
+        """Aísla la extracción JSON en su propio entorno para que si falla no rompa el enrutamiento."""
         prompt_extractor = f"""
-        Actúa como un extractor de entidades ultra preciso para un sistema de energía solar.
-        Analiza el nuevo mensaje buscando menciones de nombre, ciudad, consumo o tipo de sistema.
-
-        Estado de memoria actual: {datos_cliente} 
-        Nuevo mensaje recibido: "{user_input}" 
-
-        Devuelve UNICAMENTE un objeto JSON puro con las llaves: nombre, ciudad, consumo_anual_kwh, tipo_sistema.
-        Si no hay datos nuevos para una llave, mantén el valor preexistente del Estado actual.
-        Está prohibido agregar texto extra o marcas de código markdown.
+        Extrae datos relevantes (nombre, ciudad, consumo_anual_kwh, tipo_sistema) en un objeto JSON puro.
+        Estado actual: {datos_cliente}
+        Mensaje: "{user_input}"
+        No agregues formato markdown ni texto extra.
         """
         try:
             res = client.models.generate_content(model='gemini-2.5-flash', contents=prompt_extractor)
             texto_limpio = res.text.strip().replace("```json", "").replace("```", "")
             nuevos_datos = json.loads(texto_limpio)
-            
-            for k, v nuevos_datos.items():
+            for k, v in nuevos_datos.items():
                 if v is not None:
                     datos_cliente[k] = v
         except Exception:
-            pass 
+            pass
 
-        # BLOQUE B: LÓGICA DE ENRUTAMIENTO JERÁRQUICO MULTIAGENTE
-        if any(word in mensaje for word in ["salir", "chau", "adios", "hasta luego", "terminar", "cerrar", "basta"]):
+    def route_request(self, user_input, datos_cliente):
+        """Ejecuta la extracción y garantiza un retorno de agente válido siempre."""
+        # 1. Corremos la extracción protegida en segundo plano
+        self._extraer_datos_bg(user_input, datos_cliente)
+
+        # 2. Analizamos las intenciones en minúsculas
+        mensaje = user_input.lower()
+
+        # 3. Filtro de Salida
+        if any(word in mensaje for word in ["salir", "chau", "adios", "hasta luego", "terminar", "cerrar"]):
             return subagente_casual
 
+        # 4. Filtro Comercial y Enlaces Web (Agregamos disparadores de enlaces web para que el comercial los capture)
+        if any(word in mensaje for word in ["precio", "costo", "financiar", "presupuesto", "roi", "plata", "guardar", "crm", "comprar", "calcula", "calculalo", "retorno", "usina", "http", "https", "www", ".com"]):
+            return subagente_comercial
+
+        # 5. Filtro Técnico
+        if any(word in mensaje for word in ["panel", "techo", "bateria", "granizo", "ingenieria", "inversor", "ley", "medidor", "generacion", "distribuida", "inyectar", "orientacion", "inclinacion", "sudeste"]):
+            return subagente_tecnico
+
+        # 6. Filtro de Saludos Iniciales
+        if mensaje in ["hola", "buen dia", "buenas", "gracias"] or any(word in mensaje for word in ["chiste", "que haces", "hola cómo estás"]):
+            if not datos_cliente.get("nombre") or not datos_cliente.get("ciudad"):
+                return subagente_coloquial
+            return subagente_casual
+
+        # Fallback de seguridad absoluto
