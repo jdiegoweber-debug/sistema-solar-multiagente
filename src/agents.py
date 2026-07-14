@@ -5,7 +5,7 @@ from google import genai # El SDK moderno y oficial de Google para consumir mode
 from google.genai import types # Configuraciones tipadas avanzadas para los chats de la API
 from dotenv import load_dotenv # Carga segura de claves de desarrollo desde el archivo .env
 
-# Importamos la nueva herramienta de lectura web que creamos en el paso anterior
+# Importamos las herramientas del sistema
 from src.tools.web_reader_tool import leer_contenido_enlace_web
 from src.tools.mcp_crm_tool import mcp_guardar_cliente_crm
 from src.tools.rag_tool import consultar_normativas_solares
@@ -26,11 +26,11 @@ REGLA_ARGENTINA = (
     "Está prohibido escribir el texto '[SharedState]' o volcar el diccionario JSON en tu respuesta."
 )
 
-# Memoria global cruzada de mensajes unificados para mantener el hilo de la charla entre agentes
+# Memoria global cruzada de mensajes unificados
 HISTORIAL_MENSAJES_GLOBAL = {}
 
 # =========================================================================
-# CLASE BASE PARA SUB-AGENTES CON CONTEXTO COMPARTIDO
+# CLASE BASE PARA SUB-AGENTES CON CONTEXTO COMPARTIDO MULTIMODAL
 # =========================================================================
 class SubAgenteBaseConSesion:
     def __init__(self, name, instruction, tools=None):
@@ -38,9 +38,11 @@ class SubAgenteBaseConSesion:
         self.instruction = instruction + REGLA_ARGENTINA 
         self.tools = tools or [] 
 
-    def responder(self, mensaje_usuario, datos_cliente, session_id="consola_default"):
+    # ¡CORREGIDO!: Sumamos el parámetro opcional ruta_archivo para sincronizar con main.py
+    def responder(self, mensaje_usuario, datos_cliente, session_id="consola_default", ruta_archivo=None):
         """
-        Gestiona la conversación histórica cruzada inyectando el estado mutado y las herramientas RAG/MCP/Web.
+        Gestiona la conversación histórica cruzada inyectando el estado mutado, las herramientas y
+        archivos locales (multimodales) directamente a la API de Google.
         """
         global HISTORIAL_MENSAJES_GLOBAL
         
@@ -59,18 +61,31 @@ class SubAgenteBaseConSesion:
 
         # 3. Inyección de la Herramienta de Lectura de Enlaces Web (Scraper)
         if leer_contenido_enlace_web in self.tools and ("http://" in mensaje_usuario or "https://" in mensaje_usuario):
-            # Extraemos la URL que el usuario pegó en la consola usando expresiones regulares
             urls = re.findall(r'(https?://[^\s]+)', mensaje_usuario)
             if urls:
                 # Invocamos la herramienta web e inyectamos el texto limpio extraído de la página en el prompt
                 contexto_herramientas += f"\n\n[Contenido de la Factura Extraído de la Web]: {leer_contenido_enlace_web(urls[0])}"
 
-        # Ensamblamos el mensaje final sumando el aporte de la herramienta que se haya activado
-        mensaje_final = f"{mensaje_usuario}{contexto_herramientas}"
+        # Ensamblamos las partes del mensaje (pueden ser texto o referencias de archivos de Google)
+        partes_mensaje = []
+        
+        # --- BLOQUE MULTIMODAL NATIVO (Procesamiento de Archivos Locales) ---
+        if ruta_archivo and os.path.exists(ruta_archivo):
+            try:
+                print(f"📁 [File Service Cloud] Subiendo '{os.path.basename(ruta_archivo)}' de forma directa a Google...")
+                archivo_google = client.files.upload(file=ruta_archivo)
+                partes_mensaje.append(archivo_google)
+                print("✅ [File Service Cloud] Archivo cargado correctamente en el contexto multimodal.")
+            except Exception as e:
+                contexto_herramientas += f"\n\n[Aviso del Sistema]: No se pudo cargar el archivo adjunto por el error: {e}"
 
-        # Guardamos el mensaje actual del usuario en la memoria global de la sesión
+        # Añadimos el texto final del usuario junto con las inyecciones de las herramientas a las partes
+        mensaje_final = f"{mensaje_usuario}{contexto_herramientas}"
+        partes_mensaje.append(types.Part.from_text(text=mensaje_final))
+
+        # Guardamos el contenido estructurado en la memoria global de la sesión
         HISTORIAL_MENSAJES_GLOBAL[session_id].append(
-            types.Content(role="user", parts=[types.Part.from_text(text=mensaje_final)])
+            types.Content(role="user", parts=partes_mensaje)
         )
 
         # Configuramos las instrucciones del sistema actualizadas dinámicamente con el estado real mutado
@@ -79,7 +94,7 @@ class SubAgenteBaseConSesion:
             temperature=0.3 
         )
 
-        # Invocamos el modelo generate_content enviándole TODO el historial unificado de la conversación
+        # Invocamos el modelo generate_content enviándole TODO el historial unificado con soporte multimodal
         response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=HISTORIAL_MENSAJES_GLOBAL[session_id],
@@ -115,16 +130,15 @@ subagente_tecnico = SubAgenteBaseConSesion(
     tools=[consultar_normativas_solares]
 )
 
-# Actualizamos las instrucciones y herramientas del comercial para que sepa interpretar la inyección web
 subagente_comercial = SubAgenteBaseConSesion(
     name="AgenteComercial",
     instruction=(
         "Eres el asesor financiero especialista en costos del equipo solar. Calculas presupuestos estimados y el retorno de inversión (ROI).\n"
-        "Analiza el historial y el bloque de contenido web si existiese: si el cliente te pasa un enlace, lee los datos extraídos "
+        "Analiza el historial y el bloque de contenido o archivo adjunto si existiese: si el cliente te pasa un enlace, lee los datos extraídos "
         "para buscar los kWh consumidos, el monto total a pagar de la boleta y el nombre de la distribuidora (ej: Usina de Tandil).\n"
         "Usa esos números reales de la factura para ajustar el cálculo del ROI en pesos argentinos de forma precisa."
     ),
-    tools=[mcp_guardar_cliente_crm, leer_contenido_enlace_web] # Sumamos la herramienta de lectura web
+    tools=[mcp_guardar_cliente_crm, leer_contenido_enlace_web]
 )
 
 
@@ -155,28 +169,12 @@ class OrquestadorSolar:
 
     def route_request(self, user_input, datos_cliente):
         """Ejecuta la extracción y garantiza un retorno de agente válido siempre."""
-        # 1. Corremos la extracción protegida en segundo plano
         self._extraer_datos_bg(user_input, datos_cliente)
-
-        # 2. Analizamos las intenciones en minúsculas
         mensaje = user_input.lower()
 
-        # 3. Filtro de Salida
         if any(word in mensaje for word in ["salir", "chau", "adios", "hasta luego", "terminar", "cerrar"]):
             return subagente_casual
 
-        # 4. Filtro Comercial y Enlaces Web (Agregamos disparadores de enlaces web para que el comercial los capture)
-        if any(word in mensaje for word in ["precio", "costo", "financiar", "presupuesto", "roi", "plata", "guardar", "crm", "comprar", "calcula", "calculalo", "retorno", "usina", "http", "https", "www", ".com"]):
+        if any(word in mensaje for word in ["precio", "costo", "financiar", "presupuesto", "roi", "plata", "guardar", "crm", "comprar", "calcula", "calculalo", "retorno", "usina", "http", "https", "www", ".com", "adjunto", "archivo", "factura", "boleta", "pdf", "imagen"]):
             return subagente_comercial
 
-        # 5. Filtro Técnico
-        if any(word in mensaje for word in ["panel", "techo", "bateria", "granizo", "ingenieria", "inversor", "ley", "medidor", "generacion", "distribuida", "inyectar", "orientacion", "inclinacion", "sudeste"]):
-            return subagente_tecnico
-
-        # 6. Filtro de Saludos Iniciales
-        if mensaje in ["hola", "buen dia", "buenas", "gracias"] or any(word in mensaje for word in ["chiste", "que haces", "hola cómo estás"]):
-            if not datos_cliente.get("nombre") or not datos_cliente.get("ciudad"):
-                return subagente_coloquial
-            return subagente_casual
-
-        # Fallback de seguridad absoluto
