@@ -1,6 +1,7 @@
 import os # Importamos el módulo del sistema para leer rutas y variables de entorno de forma segura
 import numpy as np # Biblioteca matemática estándar para cómputo numérico lineal de vectores
 from google import genai # El SDK oficial actual provisto por Google para interactuar con Gemini
+from google.genai import types # Módulos de configuración tipada para parámetros del SDK
 from dotenv import load_dotenv # Módulo para cargar las credenciales desde el archivo .env
 
 # Levantamos las variables de entorno locales (.env) para extraer la API KEY
@@ -40,14 +41,17 @@ def _obtener_embedding(texto: str, es_consulta: bool = False) -> list:
     """
     Función interna que transforma un texto en un vector numérico representativo mediante la API de Google.
     """
-    # Determinamos el tipo de tarea según las buenas prácticas del modelo text-embedding-004
+    # Determinamos el tipo de tarea según si es una pregunta o un documento del corpus
     tipo_tarea = "RETRIEVAL_QUERY" if es_consulta else "RETRIEVAL_DOCUMENT"
     
-    # Invocamos el modelo de embeddings nativo de Gemini
+    # Invocamos el modelo de embeddings nativo de Gemini usando 'text-embedding-004'
+    # Agregamos la configuración explícita de la API en el config para evitar el error 404
     response = client.models.embed_content(
         model="text-embedding-004", 
         contents=texto,
-        config={"task_type": tipo_tarea}
+        config=types.EmbedContentConfig(
+            task_type=tipo_tarea
+        )
     )
     # Retornamos el vector flotante que contiene la semántica del texto
     return response.embeddings.values
@@ -58,7 +62,6 @@ for llave, texto_normativo in CORPUS_NORMATIVO.items():
     VECTORES_CORPUS[llave] = _obtener_embedding(texto_normativo, es_consulta=False)
 
 
-# ¡ACÁ ESTÁ LA FUNCIÓN REQUERIDA! Aseguramos que el nombre coincida exactamente con la importación de agent.py
 def consultar_normativas_solares(query: str) -> str:
     """
     Algoritmo RAG Principal consumido por tus agentes. Compara semánticamente la pregunta
@@ -95,7 +98,7 @@ def consultar_normativas_solares(query: str) -> str:
         if mejor_llave and max_similitud > 0.35:
             return CORPUS_NORMATIVO[mejor_llave]
         
-        # En caso de no detectar un tema específico, inyectamos por defecto la normativa fotovoltaica general
+        # En caso de no levantar afinidad, inyectamos por defecto la normativa fotovoltaica general
         return CORPUS_NORMATIVO["ley_generacion_distribuida"]
 
     except Exception as e:
