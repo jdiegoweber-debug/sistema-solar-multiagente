@@ -7,8 +7,7 @@ from dotenv import load_dotenv # Utilidad para levantar de forma segura las clav
 # Levantamos la configuración del archivo .env para extraer tus credenciales de pago de Google AI Studio
 load_dotenv()
 
-# ¡CONFIGURACIÓN CLOUD DEFINITIVA!: Forzamos al cliente moderno a comunicarse usando el endpoint 'v1' estable
-# Esto remueve el bug de enrutamiento de la ruta 'v1beta' y garantiza que tu API de pago responda siempre
+# Inicializamos el cliente apuntando formalmente a la versión de API 'v1' estable
 client = genai.Client(
     api_key=os.environ.get("GEMINI_API_KEY"),
     http_options={'api_version': 'v1'}
@@ -45,14 +44,14 @@ CORPUS_NORMATIVO = {
 def _obtener_embedding(texto: str, es_consulta: bool = False) -> list:
     """
     Función interna que invoca el endpoint oficial de pago de Google GenAI para transformar
-    texto plano en un vector matemático representativo (text-embedding-004).
+    texto plano en un vector matemático representativo resolviendo la ruta con el prefijo formal 'models/'.
     """
     # Optimizamos el downstream determinando si el texto es una pregunta libre o un documento estático
     tipo_tarea = "RETRIEVAL_QUERY" if es_consulta else "RETRIEVAL_DOCUMENT"
     
-    # Invocación estructurada al modelo estable text-embedding-004 pasando la tarea correspondiente
+    # Invocación estructurada agregando el prefijo completo 'models/' exigido por la versión v1 de la API
     response = client.models.embed_content(
-        model="text-embedding-004", # Modelo oficial estable de Google para indexación de texto plano
+        model="models/text-embedding-004", # Ruta absoluta requerida por el catálogo estable del SDK moderno
         contents=texto,
         config=types.EmbedContentConfig(
             task_type=tipo_tarea # Parámetro requerido por la API para optimizar pesos conceptuales
