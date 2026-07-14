@@ -43,15 +43,15 @@ CORPUS_NORMATIVO = {
 
 def _obtener_embedding(texto: str, es_consulta: bool = False) -> list:
     """
-    Función interna que invoca el endpoint oficial de pago de Google GenAI para transformar
-    texto plano en un vector matemático representativo resolviendo la ruta con el prefijo formal 'models/'.
+    Función interna que invoca el endpoint oficial de pago de Google GenAI usando el modelo universal
+    de embeddings totalmente soportado por la API v1.
     """
     # Optimizamos el downstream determinando si el texto es una pregunta libre o un documento estático
     tipo_tarea = "RETRIEVAL_QUERY" if es_consulta else "RETRIEVAL_DOCUMENT"
     
-    # Invocación estructurada agregando el prefijo completo 'models/' exigido por la versión v1 de la API
+    # Invocación estructurada usando la ruta absoluta del modelo universal de embeddings compatible
     response = client.models.embed_content(
-        model="models/text-embedding-004", # Ruta absoluta requerida por el catálogo estable del SDK moderno
+        model="models/embedding-001", # Probamos con el modelo clásico universal de Google
         contents=texto,
         config=types.EmbedContentConfig(
             task_type=tipo_tarea # Parámetro requerido por la API para optimizar pesos conceptuales
@@ -113,4 +113,4 @@ def consultar_normativas_solares(query: str) -> str:
 
     except Exception as e:
         # Capa de contingencia en caso de microcortes de red de la API durante la sesión de chat
-        return f"[Aviso RAG Contingente - Error de Red: {e}] Contexto inyectado: Ley Nacional 27.424 de Generación Distribuida."
+        return f"[Aviso RAG Contingente - Error de Red: {e}] Contexto inyectado: Ley Nacional 27.424 de Generation Distribuida."
