@@ -1,8 +1,8 @@
-import sys # Módulo para interactuar con funciones esenciales del sistema operativo e intérprete de Python
+import sys # Módulo para interactuar con funciones esenciales del sistema operativo e intérpretes de Python
 from src.state import SolarProjectState # Cargamos tu esquema Pydantic para manejar de forma segura la memoria del cliente
 
-# Importamos el orquestador central desde tu archivo 'src/agents.py' en plural para respetar tu estructura original
-from src.agents import solar_orchestrator 
+# Importamos directamente tu variable exacta desde tu archivo 'src/agents.py'
+from src.agents import solar_orchestrator
 
 def main():
     """
@@ -53,7 +53,7 @@ def main():
 
             # Condición de salida si el cliente ingresa una palabra clave de despedida comercial
             if any(word in user_input.lower() for word in ["salir", "chau", "adios", "hasta luego", "terminar"]):
-                print("👋 Sistema cerrado correctamente. ¡Muchos éxitos en la defensa de tu Trabajo Práctico!")
+                print("👋 Sistema cerrado correctamente.")
                 break
 
         except (KeyboardInterrupt, EOFError):

@@ -1,12 +1,12 @@
-import os # Importamos el módulo del sistema para leer rutas y variables de entorno de forma segura
-import numpy as np # Biblioteca matemática estándar para cómputo numérico lineal de vectores
-from google import genai # El SDK oficial actual provisto por Google para interactuar con Gemini
-from google.genai import types # Módulos de configuración tipada para parámetros del SDK
-from dotenv import load_dotenv # Módulo para cargar las credenciales desde el archivo .env
+import os # Módulo para interactuar de forma segura con variables de entorno del sistema operativo
+import numpy as np # Biblioteca estándar para cálculos matemáticos veloces de álgebra lineal y matrices
+from google import genai # El SDK oficial moderno provisto por Google que usas en tu archivo agents.py
+from google.genai import types # Módulo de tipado para estructurar configuraciones nativas del SDK de Google
+from dotenv import load_dotenv # Utilidad para levantar de forma segura las claves desde el archivo .env
 
-# Levantamos las variables de entorno locales (.env) para extraer la API KEY
+# Levantamos la configuración del archivo .env para extraer tus credenciales de pago de Google AI Studio
 load_dotenv()
-# Creamos la instancia del cliente utilizando exactamente la misma configuración que en tu agent.py
+# Instanciamos el cliente reutilizando la misma API KEY global, garantizando consistencia en todo el proyecto
 client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
 # CORPUS DE CONOCIMIENTO (Base de datos de grounding real para el Agente Técnico)
@@ -39,68 +39,75 @@ CORPUS_NORMATIVO = {
 
 def _obtener_embedding(texto: str, es_consulta: bool = False) -> list:
     """
-    Función interna que transforma un texto en un vector numérico representativo mediante la API de Google.
+    Función interna que invoca el endpoint oficial de pago de Google GenAI para transformar
+    texto plano en un vector matemático representativo (text-embedding-004).
     """
-    # Determinamos el tipo de tarea según si es una pregunta o un documento del corpus
+    # Optimizamos el downstream determinando si el texto es una pregunta libre o un documento estático
     tipo_tarea = "RETRIEVAL_QUERY" if es_consulta else "RETRIEVAL_DOCUMENT"
     
-    # Invocamos el modelo de embeddings nativo de Gemini usando 'text-embedding-004'
-    # Agregamos la configuración explícita de la API en el config para evitar el error 404
+    # Invocación estructurada al modelo estable text-embedding-004 pasando la tarea correspondiente
     response = client.models.embed_content(
-        model="text-embedding-004", 
+        model="text-embedding-004", # Modelo oficial estable de Google para indexación de texto plano
         contents=texto,
         config=types.EmbedContentConfig(
-            task_type=tipo_tarea
+            task_type=tipo_tarea # Parámetro requerido por la API para optimizar pesos conceptuales
         )
     )
-    # Retornamos el vector flotante que contiene la semántica del texto
+    # Extraemos y retornamos los valores numéricos decimales del vector del espacio latente
     return response.embeddings.values
 
-# Pre-cómputo automático de los vectores para que la app responda de forma ultra veloz en la terminal
+# PRE-CÓMPUTO VECTORIAL OBLIGATORIO (Se ejecuta una sola vez al arrancar el programa)
+# Convertimos todas las normativas del corpus en vectores de Google y los dejamos listos en memoria RAM
 VECTORES_CORPUS = {}
+print("🛰️  Conectando con la API de Google: Inicializando tensores y base de datos vectorial del RAG...")
+
 for llave, texto_normativo in CORPUS_NORMATIVO.items():
-    VECTORES_CORPUS[llave] = _obtener_embedding(texto_normativo, es_consulta=False)
+    # Cada fragmento de texto se convierte en un array unidimensional de NumPy de alta dimensionalidad
+    VECTORES_CORPUS[llave] = np.array(_obtener_embedding(texto_normativo, es_consulta=False))
+
+print("✅ [Modo Vectorial Cloud Activo]: Base de conocimiento sincronizada mediante la API de Google.")
 
 
 def consultar_normativas_solares(query: str) -> str:
     """
     Algoritmo RAG Principal consumido por tus agentes. Compara semánticamente la pregunta
-    del usuario contra la base de datos usando Similitud Coseno e inyecta la respuesta exacta.
+    del usuario contra los vectores de Google usando Similitud Coseno e inyecta el contexto exacto.
     """
-    # Control defensivo inicial
+    # Control defensivo para evitar procesar consultas de texto vacías
     if not query or not query.strip():
         return "No se especificó ninguna consulta técnica válida para procesar en el motor RAG."
 
     try:
-        # Transformamos la pregunta libre del cliente en un vector matemático
+        # 1. Transformamos la pregunta libre del cliente en un vector de consulta usando tu API de Google
         vector_pregunta = _obtener_embedding(query, es_consulta=True)
         v_query = np.array(vector_pregunta)
 
         mejor_llave = None
-        max_similitud = -1.0
+        max_similitud = -1.0 # Inicializamos el umbral de comparación matemática en su punto más bajo
 
-        # Escaneo de proximidad matemática en el espacio vectorial (Similitud Coseno)
-        for llave, vector_documento in VECTORES_CORPUS.items():
-            v_doc = np.array(vector_documento)
-            
-            # Aplicamos la fórmula oficial de Similitud Coseno (Producto punto dividido el producto de las normas)
+        # 2. Escaneo geométrico de proximidad en el espacio vectorial (Álgebra lineal con Numpy)
+        for llave, v_doc in VECTORES_CORPUS.items():
+            # Cómputo del Producto Punto (Dot Product) entre ambos vectores
             producto_punto = np.dot(v_query, v_doc)
+            # Cálculo de las Magnitudes Geométricas (Normas Euclidianas) de los vectores
             norma_query = np.linalg.norm(v_query)
             norma_doc = np.linalg.norm(v_doc)
+            
+            # Aplicamos la ecuación oficial de Similitud Coseno
             similitud_coseno = producto_punto / (norma_query * norma_doc)
 
-            # Si la puntuación supera al récord previo, guardamos el documento como ganador de contexto
+            # Si la puntuación de afinidad supera al récord previo, actualizamos los punteros del RAG
             if similitud_coseno > max_similitud:
                 max_similitud = similitud_coseno
                 mejor_llave = llave
 
-        # Si el documento supera un umbral mínimo de confianza semántica, inyectamos el fragmento normativo
+        # 3. Retorno del fragmento normativo ganador si supera el umbral de confianza mínimo
         if mejor_llave and max_similitud > 0.35:
             return CORPUS_NORMATIVO[mejor_llave]
         
-        # En caso de no levantar afinidad, inyectamos por defecto la normativa fotovoltaica general
+        # Estrategia de resguardo: Si la consulta no matchea un tema específico, inyectamos la ley general
         return CORPUS_NORMATIVO["ley_generacion_distribuida"]
 
     except Exception as e:
-        # Sistema de contingencia resiliente ante cortes de internet o fallas de la API de Google
-        return f"[Aviso RAG Contingente - Error: {e}] Contexto base: Ley Nacional 27.424 de Generación Distribuida."
+        # Capa de contingencia en caso de microcortes de red de la API durante la sesión de chat
+        return f"[Aviso RAG Contingente - Error de Red: {e}] Contexto inyectado: Ley Nacional 27.424 de Generación Distribuida."
