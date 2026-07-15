@@ -16,3 +16,6 @@ google-genai
 
 # 5. Sistema de validación de datos estructurados utilizado para la consistencia de la memoria de SolarProjectState
 pydantic
+
+# 6. Lee PDF
+pypdf
